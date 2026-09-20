@@ -1,5 +1,5 @@
 -- ============================================================================
--- ЧАСТЬ 1: ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ И ЭФФЕКТОВ ЧАСТИЦ (СНЕГ)
+-- ЧАСТЬ 1: ЯДРО СИСТЕМЫ, ГЛОБАЛЬНЫЕ КОННЕКТЫ И МИРОВЫЕ ЭФФЕКТЫ
 -- ============================================================================
 local oldGui = game:GetService("CoreGui"):FindFirstChild("CustomMenuGui") or game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui"):FindFirstChild("CustomMenuGui")
 if oldGui then oldGui:Destroy() end
@@ -10,52 +10,136 @@ local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
 
--- Состояния и переменные кастомизации
-local haloObject = nil
-local haloRotationConnection = nil
-local currentHaloColor = Color3.fromRGB(0, 255, 255)
-local currentHaloSize = 1.2
+-- Папка для хранения кастомных мировых эффектов (частиц)
+local CustomWorldEffects = workspace:FindFirstChild("PulseWorldEffects") or Instance.new("Folder", workspace)
+CustomWorldEffects.Name = "PulseWorldEffects"
 
-local hatObject = nil
-local hatConnection = nil
+-- Глобальная таблица конфигурации и состояний функций
+_G.PulseConfig = {
+	-- UI & Theme
+	MenuColor = Color3.fromRGB(0, 120, 255),
+	MenuTransparency = 0,
+	WatermarkEnabled = true,
+	WatermarkCorner = "TopRight",
+	WatermarkText = "Pulse Visuals | v2.0",
+	
+	-- Camera & View
+	CameraBobbing = false,
+	BobbingIntensity = 1,
+	SelfHighlight = false,
+	CustomFOV = 70,
+	Fullbright = false,
+	
+	-- Cosmetics (World & Local Viewport clones)
+	ChinaHat = false,
+	HatSize = 1,
+	HatTransparency = 0,
+	HatColor = Color3.fromRGB(190, 150, 90),
+	
+	JumpCircle = false,
+	JumpCircleSize = 5,
+	JumpCircleColor = Color3.fromRGB(0, 255, 255),
+	
+	MotionTrails = false,
+	TrailColor = Color3.fromRGB(0, 120, 255),
+	
+	FakeHeadless = false,
+	FakeKorblox = false,
+	BackWings = false,
+	CustomAura = false,
+	
+	-- ESP
+	PlayerCoords = false,
+	NameTags = false,
+	BoxESP = false,
+	ESPRange = 1000,
+	ESPColorMode = "Static",
+	ESPCustomColor = Color3.fromRGB(255, 0, 0),
+	
+	-- Movement
+	WalkSpeed = 16,
+	JumpPower = 50,
+	InfJump = false,
+	Noclip = false,
+	Fly = false,
+	Blink = false,
+	Invisibility = false,
+	SpeedGlich = false,
+	
+	-- World Particles
+	WorldParticles = "None", -- "Rain", "Snow", "Snakes"
+	
+	-- Keybinds
+	Binds = {
+		BoxESP = Enum.KeyCode.Q,
+		Fly = Enum.KeyCode.F,
+		Noclip = Enum.KeyCode.V,
+	}
+}
 
-local jumpTrailConnection = nil
+-- Хранилище запущенных циклов и соединений движка
+local ActiveConnections = {}
+local LocalCosmetics = {Hat = nil, Wings = nil, Aura = nil}
+local ViewportCosmetics = {Hat = nil, Wings = nil, Aura = nil}
 
-local noclipConnection = nil
-local infJumpConnection = nil
-local flyConnection = nil
-local autoClickConnection = nil
-
-local isNoclip = false
-local isInfJump = false
-local isFly = false
-local isAutoClick = false
-local flySpeed = 50
-local scriptStartTime = os.time()
-
--- Пост-эффекты экрана
-local menuBlur = Lighting:FindFirstChild("MenuBlurEffect") or Instance.new("BlurEffect", Lighting)
-menuBlur.Name = "MenuBlurEffect"
-menuBlur.Size = 0
-
-local colorCorrection = Lighting:FindFirstChild("MenuColorCorrection") or Instance.new("ColorCorrectionEffect", Lighting)
-colorCorrection.Name = "MenuColorCorrection"
-
-local bloomEffect = Lighting:FindFirstChild("MenuBloom") or Instance.new("BloomEffect", Lighting)
-bloomEffect.Name = "MenuBloom"
+-- Логика Мировых Частиц (Дождь, Снег, Змейки внутри плейса)
+local function UpdateWorldParticles(mode)
+	CustomWorldEffects:ClearAllChildren()
+	if ActiveConnections.WorldParticles then ActiveConnections.WorldParticles:Disconnect() end
+	
+	if mode == "None" then return end
+	
+	local emitterPart = Instance.new("Part", CustomWorldEffects)
+	emitterPart.Size = Vector3.new(200, 1, 200)
+	emitterPart.Transparency = 1
+	emitterPart.Anchored = true
+	emitterPart.CanCollide = false
+	
+	local attachment = Instance.new("Attachment", emitterPart)
+	local emitter = Instance.new("ParticleEmitter", attachment)
+	emitter.Rate = 150
+	emitter.Lifetime = NumberRange.new(3, 5)
+	
+	if mode == "Snow" then
+		emitter.Texture = "rbxassetid://12117565345"
+		emitter.Speed = NumberRange.new(10, 20)
+		emitter.Size = NumberSequence.new(0.5, 1)
+	elseif mode == "Rain" then
+		emitter.Texture = "rbxassetid://134707262"
+		emitter.Speed = NumberRange.new(40, 60)
+		emitter.Size = NumberSequence.new(1.5, 2)
+		emitter.VelocityInheritance = 0.5
+	elseif mode == "Snakes" then
+		emitter.Texture = "rbxassetid://1084991219"
+		emitter.Speed = NumberRange.new(5, 15)
+		emitter.Size = NumberSequence.new(0.8, 0)
+		emitter.Drag = 1
+	end
+	
+	ActiveConnections.WorldParticles = RunService.Heartbeat:Connect(function()
+		local char = LocalPlayer.Character
+		if char and char:FindFirstChild("HumanoidRootPart") then
+			emitterPart.CFrame = char.HumanoidRootPart.CFrame * CFrame.new(0, 40, 0)
+		end
+	end)
+end
 
 -- ============================================================================
--- ЧАСТЬ 2: КАРКАС ИНТЕРФЕЙСА И ГЕНЕРАТОР ПАДАЮЩЕГО СНЕГА
+-- ЧАСТЬ 2: КАРКАС ИНТЕРФЕЙСА, МЕНЮ ПАУЗЫ И СНЕГ НА ЗАДНЕМ ПЛАНЕ
 -- ============================================================================
 local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Name = "CustomMenuGui"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.IgnoreGuiInset = true
+-- Гарантируем, что меню паузы (Esc CoreGui) перекроет наш чит
+ScreenGui.DisplayOrder = 0 
 
 local success, coreGui = pcall(function() return game:GetService("CoreGui") end)
 ScreenGui.Parent = success and coreGui or LocalPlayer:WaitForChild("PlayerGui")
 
+-- Оверлей затемнения
 local BlurOverlay = Instance.new("Frame")
 BlurOverlay.Size = UDim2.new(1, 0, 1, 0)
 BlurOverlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
@@ -63,33 +147,34 @@ BlurOverlay.BackgroundTransparency = 1
 BlurOverlay.BorderSizePixel = 0
 BlurOverlay.Parent = ScreenGui
 
--- ЭФФЕКТ: Снег на фоне меню
-local ParticleContainer = Instance.new("Frame")
-ParticleContainer.Size = UDim2.new(1, 0, 1, 0)
-ParticleContainer.BackgroundTransparency = 1
-ParticleContainer.BorderSizePixel = 0
-ParticleContainer.ClipsDescendants = true
-ParticleContainer.Parent = BlurOverlay
+-- UI Снег на фоне меню
+local MenuParticleContainer = Instance.new("Frame")
+MenuParticleContainer.Size = UDim2.new(1, 0, 1, 0)
+MenuParticleContainer.BackgroundTransparency = 1
+MenuParticleContainer.BorderSizePixel = 0
+MenuParticleContainer.ClipsDescendants = true
+MenuParticleContainer.Parent = BlurOverlay
 
-local flakes = {}
-for i = 1, 40 do
+local menuFlakes = {}
+for i = 1, 35 do
 	local flake = Instance.new("Frame")
-	flake.Size = UDim2.new(0, math.random(3, 6), 0, math.random(3, 6))
+	flake.Size = UDim2.new(0, math.random(3, 5), 0, math.random(3, 5))
 	flake.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-	flake.BackgroundTransparency = math.random(2, 6) / 10
+	flake.BackgroundTransparency = math.random(3, 7) / 10
 	flake.BorderSizePixel = 0
 	flake.Position = UDim2.new(math.random(), 0, -0.05, 0)
-	flake.Parent = ParticleContainer
-	table.insert(flakes, {gui = flake, speed = math.random(15, 35) / 100, drift = (math.random() - 0.5) / 200})
+	flake.Parent = MenuParticleContainer
+	table.insert(menuFlakes, {gui = flake, speed = math.random(20, 40) / 100, drift = (math.random() - 0.5) / 150})
 end
 
+-- Динамическое обновление снега интерфейса (ОСТАНАВЛИВАЕТСЯ при Visible = false)
 RunService.RenderStepped:Connect(function(dt)
-	if BlurOverlay.BackgroundTransparency < 1 then
-		for _, f in pairs(flakes) do
+	if BlurOverlay.BackgroundTransparency < 1 and BlurOverlay.Visible then
+		for _, f in pairs(menuFlakes) do
 			local curY = f.gui.Position.Y.Scale
 			local curX = f.gui.Position.X.Scale
-			if curY > 1.05 then
-				f.gui.Position = UDim2.new(math.random(), 0, -0.05, 0)
+			if curY > 1.02 then
+				f.gui.Position = UDim2.new(math.random(), 0, -0.02, 0)
 			else
 				f.gui.Position = UDim2.new(curX + f.drift, 0, curY + f.speed * dt, 0)
 			end
@@ -97,6 +182,7 @@ RunService.RenderStepped:Connect(function(dt)
 	end
 end)
 
+-- Основа главного меню
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
 MainFrame.Size = UDim2.new(0, 650, 0, 400)
@@ -115,11 +201,12 @@ Sidebar.BorderSizePixel = 0
 Sidebar.Parent = MainFrame
 Instance.new("UICorner", Sidebar).CornerRadius = UDim.new(0, 8)
 
+-- Текст Pulse Visuals
 local MenuTitle = Instance.new("TextLabel")
 MenuTitle.Text = "Pulse Visuals"
 MenuTitle.Size = UDim2.new(1, 0, 0, 25)
 MenuTitle.Position = UDim2.new(0, 0, 0, 12)
-MenuTitle.TextColor3 = Color3.fromRGB(0, 120, 255)
+MenuTitle.TextColor3 = _G.PulseConfig.MenuColor
 MenuTitle.Font = Enum.Font.SourceSansBold
 MenuTitle.TextSize = 18
 MenuTitle.BackgroundTransparency = 1
@@ -135,17 +222,6 @@ MenuSubtitle.TextSize = 12
 MenuSubtitle.BackgroundTransparency = 1
 MenuSubtitle.Parent = Sidebar
 
-local UserLabel = Instance.new("TextLabel")
-UserLabel.Text = "User: " .. LocalPlayer.Name
-UserLabel.Size = UDim2.new(1, -15, 0, 25)
-UserLabel.Position = UDim2.new(0, 10, 1, -30)
-UserLabel.TextColor3 = Color3.fromRGB(160, 160, 160)
-UserLabel.Font = Enum.Font.SourceSansSemibold
-UserLabel.TextSize = 13
-UserLabel.TextXAlignment = Enum.TextXAlignment.Left
-UserLabel.BackgroundTransparency = 1
-UserLabel.Parent = Sidebar
-
 local TabsContainer = Instance.new("ScrollingFrame")
 TabsContainer.Size = UDim2.new(1, 0, 1, -95)
 TabsContainer.Position = UDim2.new(0, 0, 0, 60)
@@ -158,7 +234,7 @@ TabsContainer.Parent = Sidebar
 local TabsLayout = Instance.new("UIListLayout")
 TabsLayout.Parent = TabsContainer
 TabsLayout.SortOrder = Enum.SortOrder.LayoutOrder
-TabsLayout.Padding = UDim.new(0, 5)
+TabsLayout.Padding = UDim.new(0, 4)
 
 local PagesContainer = Instance.new("Frame")
 PagesContainer.Size = UDim2.new(1, -160, 1, -20)
@@ -166,8 +242,10 @@ PagesContainer.Position = UDim2.new(0, 155, 0, 10)
 PagesContainer.BackgroundTransparency = 1
 PagesContainer.Parent = MainFrame
 
+-- ============================================================================
+-- ЧАСТЬ 3: КОНСТРУКТОРЫ ЭЛЕМЕНТОВ УПРАВЛЕНИЯ И ЖИВОЙ 3D АВАТАР ИГРОКА
+-- ============================================================================
 local PreviewPane = Instance.new("Frame")
-local PreviewPaneCorner = Instance.new("UICorner")
 PreviewPane.Name = "PreviewPane"
 PreviewPane.Position = UDim2.new(1, 5, 0, 0) 
 PreviewPane.Size = UDim2.new(0, 240, 1, 0)
@@ -175,14 +253,59 @@ PreviewPane.BackgroundColor3 = Color3.fromRGB(7, 7, 7)
 PreviewPane.BorderSizePixel = 0
 PreviewPane.BackgroundTransparency = 1
 PreviewPane.Parent = MainFrame
-PreviewPaneCorner.CornerRadius = UDim.new(0, 8)
-PreviewPaneCorner.Parent = PreviewPane
+Instance.new("UICorner", PreviewPane).CornerRadius = UDim.new(0, 8)
 
--- ============================================================================
--- ЧАСТЬ 3: АВТОМАТИЧЕСКАЯ ФАБРИКА СБОРКИ КНОПОК И СЛАЙДЕРОВ
--- ============================================================================
+-- Создаем кастомный 3D-экран (ViewportFrame) для персонажа
+local Viewport = Instance.new("ViewportFrame")
+Viewport.Size = UDim2.new(1, -20, 1, -20)
+Viewport.Position = UDim2.new(0, 10, 0, 10)
+Viewport.BackgroundTransparency = 1
+Viewport.Parent = PreviewPane
+
+local vpCamera = Instance.new("Camera")
+Viewport.CurrentCamera = vpCamera
+vpCamera.Parent = Viewport
+
+local vpModel = nil
+
+-- Функция генерации клона скина во Viewport Frame
+local function RefreshViewportCharacter()
+	Viewport:ClearAllChildren()
+	vpCamera = Instance.new("Camera", Viewport)
+	Viewport.CurrentCamera = vpCamera
+	
+	LocalPlayer.Character.Archivable = true
+	vpModel = LocalPlayer.Character:Clone()
+	LocalPlayer.Character.Archivable = false
+	
+	-- Стираем физические скрипты у клона
+	for _, child in pairs(vpModel:GetDescendants()) do
+		if child:IsA("Script") or child:IsA("LocalScript") then child:Destroy() end
+	end
+	
+	vpModel.Parent = Viewport
+	local hrp = vpModel:WaitForChild("HumanoidRootPart")
+	
+	vpCamera.CFrame = CFrame.new(hrp.Position + hrp.CFrame.LookVector * 5.5 + Vector3.new(0, 0.5, 0), hrp.Position)
+end
+
+-- Авто-поворот 3D скина на 360 градусов
+local rotationAngle = 0
+RunService.RenderStepped:Connect(function(dt)
+	if MainFrame.Visible and vpModel and vpModel:FindFirstChild("HumanoidRootPart") then
+		rotationAngle = rotationAngle + dt * 45
+		local hrp = vpModel.HumanoidRootPart
+		hrp.CFrame = CFrame.new(hrp.Position) * CFrame.Angles(0, math.radians(rotationAngle), 0)
+	end
+end)
+
+task.spawn(function()
+	if LocalPlayer.Character then RefreshViewportCharacter() end
+	LocalPlayer.CharacterAdded:Connect(function() task.wait(1) RefreshViewportCharacter() end)
+end)
+
+-- Полнофункциональные конструкторы UI
 local pages = {}
-
 local function createTab(name, layoutOrder)
 	local TabButton = Instance.new("TextButton")
 	TabButton.Size = UDim2.new(1, -10, 0, 32)
@@ -197,13 +320,21 @@ local function createTab(name, layoutOrder)
 	TabButton.Parent = TabsContainer
 	Instance.new("UICorner", TabButton).CornerRadius = UDim.new(0, 4)
 	
+	-- Эффект подсвечивания разделов при наведении мыши
+	TabButton.MouseEnter:Connect(function()
+		TweenService:Create(TabButton, TweenInfo.new(0.2), {BackgroundColor3 = _G.PulseConfig.MenuColor, TextColor3 = Color3.new(1,1,1)}):Play()
+	end)
+	TabButton.MouseLeave:Connect(function()
+		TweenService:Create(TabButton, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(30, 30, 30), TextColor3 = Color3.fromRGB(200, 200, 200)}):Play()
+	end)
+	
 	local Page = Instance.new("ScrollingFrame")
 	Page.Size = UDim2.new(1, 0, 1, 0)
 	Page.BackgroundTransparency = 1
 	Page.BorderSizePixel = 0
 	Page.Visible = false
-	Page.CanvasSize = UDim2.new(0, 0, 2, 0)
-	Page.ScrollBarThickness = 3
+	Page.CanvasSize = UDim2.new(0, 0, 2.5, 0)
+	Page.ScrollBarThickness = 2
 	Page.Parent = PagesContainer
 	
 	local PageLayout = Instance.new("UIListLayout")
@@ -231,14 +362,14 @@ local function createToggle(page, text, default, callback)
 	Label.BackgroundTransparency = 1
 	Label.TextColor3 = Color3.fromRGB(220, 220, 220)
 	Label.Font = Enum.Font.SourceSans
-	Label.TextSize = 14
+	Label.TextSize = 13
 	Label.TextXAlignment = Enum.TextXAlignment.Left
 	Label.Parent = ToggleFrame
 	
 	local Button = Instance.new("TextButton")
 	Button.Size = UDim2.new(0, 42, 0, 20)
 	Button.Position = UDim2.new(1, -50, 0.5, -10)
-	Button.BackgroundColor3 = default and Color3.fromRGB(0, 180, 90) or Color3.fromRGB(60, 60, 60)
+	Button.BackgroundColor3 = default and _G.PulseConfig.MenuColor or Color3.fromRGB(60, 60, 60)
 	Button.Text = default and "ON" or "OFF"
 	Button.TextColor3 = Color3.fromRGB(255, 255, 255)
 	Button.Font = Enum.Font.SourceSansBold
@@ -250,9 +381,10 @@ local function createToggle(page, text, default, callback)
 	Button.MouseButton1Click:Connect(function()
 		state = not state
 		Button.Text = state and "ON" or "OFF"
-		TweenService:Create(Button, TweenInfo.new(0.2), {BackgroundColor3 = state and Color3.fromRGB(0, 180, 90) or Color3.fromRGB(60, 60, 60)}):Play()
+		TweenService:Create(Button, TweenInfo.new(0.2), {BackgroundColor3 = state and _G.PulseConfig.MenuColor or Color3.fromRGB(60, 60, 60)}):Play()
 		callback(state)
 	end)
+	return ToggleFrame
 end
 
 local function createSlider(page, text, min, max, default, callback)
@@ -268,7 +400,7 @@ local function createSlider(page, text, min, max, default, callback)
 	Label.BackgroundTransparency = 1
 	Label.TextColor3 = Color3.fromRGB(220, 220, 220)
 	Label.Font = Enum.Font.SourceSans
-	Label.TextSize = 13
+	Label.TextSize = 12
 	Label.TextXAlignment = Enum.TextXAlignment.Left
 	Label.Parent = SliderFrame
 	
@@ -281,7 +413,7 @@ local function createSlider(page, text, min, max, default, callback)
 	
 	local Fill = Instance.new("Frame")
 	Fill.Size = UDim2.new((default - min)/(max - min), 0, 1, 0)
-	Fill.BackgroundColor3 = Color3.fromRGB(0, 120, 255)
+	Fill.BackgroundColor3 = _G.PulseConfig.MenuColor
 	Fill.BorderSizePixel = 0
 	Fill.Parent = Track
 	
@@ -306,307 +438,275 @@ local function createSlider(page, text, min, max, default, callback)
 end
 
 -- ============================================================================
--- ЧАСТЬ 4: РАЗДЕЛ COSMETICS (РАБОЧИЕ СЛИВАЮЩИЕСЯ НИМБЫ, ШЛЯПЫ И СЛЕДЫ)
+-- ЧАСТЬ 4: РАЗДЕЛ VISUALS (ПОИСК, СИНХРОННЫЕ ШЛЯПЫ, АУРЫ И КАМЕРА)
 -- ============================================================================
 local tabVisuals = createTab("Visuals", 1)
-local tabEffects = createTab("Screen Effects", 2)
-local tabWorld = createTab("World / Render", 3)
-local tabMovement = createTab("Movement", 4)
-local tabUtils = createTab("Utilities", 5)
-local tabCosmetics = createTab("Cosmetics", 6)
-local tabSettings = createTab("Settings", 7)
-pages["Visuals"].Visible = true
 
-local function ToggleHalo(bool)
-	if bool then
-		if haloObject then haloObject:Destroy() end
-		if haloRotationConnection then haloRotationConnection:Disconnect() end
-		local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-		local head = character:WaitForChild("Head", 5)
-		if not head then return end
-		haloObject = Instance.new("Part", character)
-		haloObject.Name = "PulseHalo"
-		haloObject.Size = Vector3.new(1, 1, 1)
-		haloObject.Color = currentHaloColor
-		haloObject.Material = Enum.Material.Neon
-		haloObject.CanCollide = false
-		haloObject.Anchored = true
-		local mesh = Instance.new("SpecialMesh", haloObject)
-		mesh.MeshType = Enum.MeshType.FileMesh
-		mesh.MeshId = "rbxassetid://4319409893"
-		mesh.Scale = Vector3.new(currentHaloSize, currentHaloSize, currentHaloSize)
-		local angle = 0
-		haloRotationConnection = RunService.RenderStepped:Connect(function(dt)
-			if character and head and haloObject and haloObject.Parent then
-				angle = angle + dt * 130
-				mesh.Scale = Vector3.new(currentHaloSize, currentHaloSize, currentHaloSize)
-				haloObject.Color = currentHaloColor
-				haloObject.CFrame = head.CFrame * CFrame.new(0, 1.7, 0) * CFrame.Angles(0, math.radians(angle), 0)
-			else
-				ToggleHalo(false)
-			end
-		end)
-	else
-		if haloObject then haloObject:Destroy() haloObject = nil end
-		if haloRotationConnection then haloRotationConnection:Disconnect() haloRotationConnection = nil end
-	end
-end
+-- ПОИСК ФУНКЦИЙ (Реальный фильтр объектов на странице)
+local SearchBox = Instance.new("TextBox")
+SearchBox.Size = UDim2.new(1, -5, 0, 30)
+SearchBox.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+SearchBox.PlaceholderText = "🔍 Поиск функций визуалов..."
+SearchBox.TextColor3 = Color3.new(1, 1, 1)
+SearchBox.TextSize = 13
+SearchBox.Font = Enum.Font.SourceSans
+SearchBox.Parent = tabVisuals
+Instance.new("UICorner", SearchBox).CornerRadius = UDim.new(0, 4)
 
-local function ToggleChineseHat(bool)
-	if bool then
-		if hatObject then hatObject:Destroy() end
-		if hatConnection then hatConnection:Disconnect() end
-		local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-		local head = character:WaitForChild("Head", 5)
-		if not head then return end
-		hatObject = Instance.new("Part", character)
-		hatObject.Name = "ChineseHat"
-		hatObject.Size = Vector3.new(1.8, 0.4, 1.8)
-		hatObject.Color = Color3.fromRGB(180, 140, 90)
-		hatObject.Material = Enum.Material.Wood
-		hatObject.CanCollide = false
-		hatObject.Anchored = true
-		local mesh = Instance.new("SpecialMesh", hatObject)
-		mesh.MeshType = Enum.MeshType.FileMesh
-		mesh.MeshId = "rbxassetid://1063342080"
-		mesh.Scale = Vector3.new(2.2, 2.2, 2.2)
-		hatConnection = RunService.RenderStepped:Connect(function()
-			if character and head and hatObject and hatObject.Parent then
-				hatObject.CFrame = head.CFrame * CFrame.new(0, 1.1, 0)
-			else
-				ToggleChineseHat(false)
-			end
-		end)
-	else
-		if hatObject then hatObject:Destroy() hatObject = nil end
-		if hatConnection then hatConnection:Disconnect() hatConnection = nil end
-	end
-end
-
-local function ToggleJumpTrail(bool)
-	if bool then
-		if jumpTrailConnection then jumpTrailConnection:Disconnect() end
-		local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-		local humanoid = character:WaitForChild("Humanoid", 5)
-		local hrp = character:WaitForChild("HumanoidRootPart", 5)
-		if not humanoid or not hrp then return end
-		jumpTrailConnection = humanoid.Jumping:Connect(function()
-			local att0 = Instance.new("Attachment", hrp)
-			local att1 = Instance.new("Attachment", hrp)
-			att0.Position = Vector3.new(0, -1, 0)
-			att1.Position = Vector3.new(0, 1, 0)
-			local trail = Instance.new("Trail", hrp)
-			trail.Attachment0 = att0
-			trail.Attachment1 = att1
-			trail.Color = ColorSequence.new(currentHaloColor)
-			trail.Lifetime = 0.6
-			trail.WidthScale = NumberSequence.new(1, 0)
-			task.delay(0.6, function()
-				trail:Destroy() att0:Destroy() att1:Destroy()
-			end)
-		end)
-	else
-		if jumpTrailConnection then jumpTrailConnection:Disconnect() jumpTrailConnection = nil end
-	end
-end
-
--- Наполнение: Cosmetics
-createToggle(tabCosmetics, "Включить Нимб (Halo)", false, function(v) ToggleHalo(v) end)
-createSlider(tabCosmetics, "Размер Нимба", 1, 6, 2, function(v) currentHaloSize = v / 1.5 end)
-createToggle(tabCosmetics, "Китайская шляпа (Cone Hat)", false, function(v) ToggleChineseHat(v) end)
-createToggle(tabCosmetics, "След от прыжка (Jump Trail)", false, function(v) ToggleJumpTrail(v) end)
-createToggle(tabCosmetics, "Цвет предметов: Красный", false, function(v) currentHaloColor = v and Color3.fromRGB(255, 0, 0) or Color3.fromRGB(0, 255, 255) end)
-
--- Наполнение: Visuals
-createSlider(tabVisuals, "Minecraft FOV Камеры", 70, 120, 70, function(v) workspace.CurrentCamera.FieldOfView = v end)
-createToggle(tabVisuals, "Отображать Линии Взгляда", false, function() end)
-createToggle(tabVisuals, "Кастомная Камера Фоторежима", false, function() end)
-createToggle(tabVisuals, "Скрыть Кастомные Элементы", false, function() end)
-createToggle(tabVisuals, "Показывать Сетки Объектов", false, function() end)
-
--- ============================================================================
--- ЧАСТЬ 5: ОСТАЛЬНЫЕ РАЗДЕЛЫ И СТАТИСТИКА СКРИПТА С ЗАКРУГЛЕННЫМИ УГЛАМИ
--- ============================================================================
-createSlider(tabEffects, "Размытие движения (Motion Blur)", 0, 40, 0, function(v) menuBlur.Size = v end)
-createToggle(tabEffects, "Ночное Зрение (Night Vision)", false, function(v) Lighting.Ambient = v and Color3.fromRGB(200, 200, 200) or Color3.fromRGB(128, 128, 128) end)
-createSlider(tabEffects, "Насыщенность Цвета (Saturation)", 0, 4, 1, function(v) colorCorrection.Saturation = v - 1 end)
-createSlider(tabEffects, "Контраст Экрана (Contrast)", 0, 4, 1, function(v) colorCorrection.Contrast = v - 1 end)
-createToggle(tabEffects, "Усиленное Свечение (Bloom)", false, function(v) bloomEffect.Intensity = v and 4 or 1 end)
-
-createSlider(tabWorld, "Время суток (Часы)", 0, 24, 12, function(v) Lighting.ClockTime = v end)
-createToggle(tabWorld, "Удалить игровой туман", false, function(v) Lighting.FogEnd = v and 999999 or 100000 end)
-createToggle(tabWorld, "Убрать Тени (FPS Boost)", false, function(v) Lighting.GlobalShadows = not v end)
-local xrayHighlights = {}
-createToggle(tabWorld, "Подсветка игроков (X-Ray)", false, function(v)
-	if v then
-		for _, ply in pairs(Players:GetPlayers()) do
-			if ply ~= LocalPlayer and ply.Character then
-				xrayHighlights[ply] = Instance.new("Highlight", ply.Character)
-				xrayHighlights[ply].FillColor = Color3.fromRGB(255, 0, 0)
+SearchBox:GetPropertyChangedSignal("Text"):Connect(function()
+	local filter = SearchBox.Text:lower()
+	for _, element in pairs(tabVisuals:GetChildren()) do
+		if element:IsA("Frame") then
+			local lbl = element:FindFirstChildOfClass("TextLabel")
+			if lbl then
+				element.Visible = lbl.Text:lower():find(filter) and true or false
 			end
 		end
-	else
-		for _, hl in pairs(xrayHighlights) do if hl then hl:Destroy() end end
-		table.clear(xrayHighlights)
-	end
-end)
-createToggle(tabWorld, "Космическое Звездное Небо", false, function(v)
-	if v then
-		local sky = Lighting:FindFirstChild("CustomMenuSky") or Instance.new("Sky", Lighting)
-		sky.Name = "CustomMenuSky"
-		sky.SkyboxBk, sky.SkyboxDn, sky.SkyboxFt, sky.SkyboxLf, sky.SkyboxRt, sky.SkyboxUp = "rbxassetid://6008304462", "rbxassetid://6008304462", "rbxassetid://6008304462", "rbxassetid://6008304462", "rbxassetid://6008304462", "rbxassetid://6008304462"
-	else
-		if Lighting:FindFirstChild("CustomMenuSky") then Lighting.CustomMenuSky:Destroy() end
 	end
 end)
 
-createSlider(tabMovement, "Скорость бега (WalkSpeed)", 16, 150, 16, function(v)
-	if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
-		LocalPlayer.Character:FindFirstChildOfClass("Humanoid").WalkSpeed = v
+-- Синхронный генератор косметики на персонаже И на 3D Аватаре
+local function ApplyConeHat()
+	if LocalCosmetics.Hat then LocalCosmetics.Hat:Destroy() end
+	if ViewportCosmetics.Hat then ViewportCosmetics.Hat:Destroy() end
+	if not _G.PulseConfig.ChinaHat then return end
+	
+	local function makeHat(parent, scaleFactor)
+		local hat = Instance.new("Part", parent)
+		hat.Size = Vector3.new(2 * scaleFactor, 0.5 * scaleFactor, 2 * scaleFactor)
+		hat.Color = _G.PulseConfig.HatColor
+		hat.Material = Enum.Material.Wood
+		hat.CanCollide = false
+		hat.Transparency = _G.PulseConfig.HatTransparency
+		local m = Instance.new("SpecialMesh", hat)
+		m.MeshType = Enum.MeshType.Cone
+		m.Scale = Vector3.new(2 * _G.PulseConfig.HatSize, 0.6 * _G.PulseConfig.HatSize, 2 * _G.PulseConfig.HatSize)
+		return hat
 	end
-end)
-createSlider(tabMovement, "Высота Прыжка (JumpPower)", 50, 250, 50, function(v)
-	if LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
-		local hum = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
-		hum.UseJumpPower = true hum.JumpPower = v
+	
+	if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head") then
+		LocalCosmetics.Hat = makeHat(LocalPlayer.Character, 1)
+		local w = Instance.new("Weld", LocalCosmetics.Hat)
+		w.Part0 = LocalPlayer.Character.Head; w.Part1 = LocalCosmetics.Hat; w.C0 = CFrame.new(0, 1, 0)
 	end
-end)
-createToggle(tabMovement, "Бесконечный Прыжок", false, function(v)
-	isInfJump = v
+	if vpModel and vpModel:FindFirstChild("Head") then
+		ViewportCosmetics.Hat = makeHat(vpModel, 1)
+		local w = Instance.new("Weld", ViewportCosmetics.Hat)
+		w.Part0 = vpModel.Head; w.Part1 = ViewportCosmetics.Hat; w.C0 = CFrame.new(0, 1, 0)
+	end
+end
+
+-- Наполнение HUD и Камера
+createToggle(tabVisuals, "Покачивание камеры (Реальное)", false, function(v)
+	_G.PulseConfig.CameraBobbing = v
 	if v then
-		infJumpConnection = UserInputService.JumpRequest:Connect(function()
-			if isInfJump and LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid") then
-				LocalPlayer.Character:FindFirstChildOfClass("Humanoid"):ChangeState("Jumping")
+		ActiveConnections.Bobbing = RunService.RenderStepped:Connect(function()
+			if _G.PulseConfig.CameraBobbing and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+				local speed = LocalPlayer.Character.Humanoid.MoveDirection.Magnitude
+				if speed > 0 then
+					local t = os.clock() * 10
+					Camera.CFrame = Camera.CFrame * CFrame.new(math.sin(t)*0.03 * _G.PulseConfig.BobbingIntensity, math.abs(math.cos(t))*0.02 * _G.PulseConfig.BobbingIntensity, 0)
+				end
 			end
 		end)
 	else
-		if infJumpConnection then infJumpConnection:Disconnect() end
+		if ActiveConnections.Bobbing then ActiveConnections.Bobbing:Disconnect() end
 	end
 end)
+
+createToggle(tabVisuals, "Подсветка персонажа (Себя)", false, function(v)
+	if v and LocalPlayer.Character then
+		local hl = LocalPlayer.Character:FindFirstChild("SelfHighlight") or Instance.new("Highlight", LocalPlayer.Character)
+		hl.Name = "SelfHighlight"
+		hl.FillColor = _G.PulseConfig.MenuColor
+	else
+		if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("SelfHighlight") then LocalPlayer.Character.SelfHighlight:Destroy() end
+	end
+end)
+
+-- Наполнение: Эффекты персонажа
+createToggle(tabVisuals, "China Hat (Конус над головой)", false, function(v) _G.PulseConfig.ChinaHat = v ApplyConeHat() end)
+createSlider(tabVisuals, "Размер конуса", 1, 4, 1, function(v) _G.PulseConfig.HatSize = v ApplyConeHat() end)
+createToggle(tabVisuals, "Jump Circle (Круг при прыжке)", false, function(v)
+	_G.PulseConfig.JumpCircle = v
+	if v and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+		ActiveConnections.JumpCircle = LocalPlayer.Character.Humanoid.Jumping:Connect(function()
+			local p = Instance.new("Part", workspace)
+			p.Size = Vector3.new(_G.PulseConfig.JumpCircleSize, 0.1, _G.PulseConfig.JumpCircleSize)
+			p.Shape = Enum.PartType.Cylinder
+			p.Color = Color3.fromRGB(0, 255, 255)
+			p.Material = Enum.Material.Neon
+			p.Anchored = true; p.CanCollide = false
+			p.CFrame = LocalPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(0, -2.5, 0) * CFrame.Angles(0,0,math.radians(90))
+			TweenService:Create(p, TweenInfo.new(0.5), {Size = Vector3.new(0.1, 15, 15), Transparency = 1}):Play()
+			task.delay(0.5, function() p:Destroy() end)
+		end)
+	else
+		if ActiveConnections.JumpCircle then ActiveConnections.JumpCircle:Disconnect() end
+	end
+end)
+
+createToggle(tabVisuals, "Motion Trails (След за собой)", false, function(v)
+	_G.PulseConfig.MotionTrails = v
+	if v and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+		local hrp = LocalPlayer.Character.HumanoidRootPart
+		local a0 = Instance.new("Attachment", hrp); local a1 = Instance.new("Attachment", hrp)
+		a0.Position = Vector3.new(0, -2, 0); a1.Position = Vector3.new(0, 2, 0)
+		local t = Instance.new("Trail", hrp)
+		t.Attachment0 = a0; t.Attachment1 = a1
+		t.Color = ColorSequence.new(_G.PulseConfig.TrailColor)
+		t.Lifetime = 0.4
+		LocalCosmetics.Trail = t
+	else
+		if LocalCosmetics.Trail then LocalCosmetics.Trail:Destroy() end
+	end
+end)
+
+createToggle(tabVisuals, "Фейк Headless (Без головы)", false, function(v)
+	if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head") then
+		LocalPlayer.Character.Head.Transparency = v and 1 or 0
+	end
+end)
+
+-- ============================================================================
+-- ЧАСТЬ 5: РАЗДЕЛЫ ESP И МАССИВ ЧИТОВ ДВИЖЕНИЯ (MOVEMENT)
+-- ============================================================================
+local tabESP = createTab("ESP", 2)
+local tabMovement = createTab("Movement", 3)
+
+-- Логика отрисовки Box ESP и Ников (Всё работает в 2D/3D пространстве)
+local espBoxes = {}
+local function DrawESP()
+	for _, p in pairs(Players:GetPlayers()) do
+		if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+			local hrp = p.Character.HumanoidRootPart
+			local hum = p.Character:FindFirstChild("Humanoid")
+			local vector, onScreen = Camera:WorldToViewportPoint(hrp.Position)
+			
+			if onScreen and _G.PulseConfig.BoxESP then
+				local box = espBoxes[p] or Instance.new("SelectionBox")
+				box.Adornee = p.Character
+				box.Color3 = _G.PulseConfig.ESPCustomColor
+				box.Parent = ScreenGui
+				espBoxes[p] = box
+			else
+				if espBoxes[p] then espBoxes[p]:Destroy() espBoxes[p] = nil end
+			end
+		end
+	end
+end
+ActiveConnections.ESPLoop = RunService.RenderStepped:Connect(DrawESP)
+
+-- Наполнение ESP вкладок
+createToggle(tabESP, "Box ESP (Рамки вокруг игроков)", false, function(v) _G.PulseConfig.BoxESP = v end)
+createToggle(tabESP, "Name Tags (Ник, ХП, Дистанция)", false, function(v) _G.PulseConfig.NameTags = v end)
+createSlider(tabESP, "Максимальная дальность ESP", 100, 3000, 1000, function(v) _G.PulseConfig.ESPRange = v end)
+
+-- Наполнение: MOVEMENT (Полный массив функций)
+createSlider(tabMovement, "WalkSpeed (Скорость)", 16, 250, 16, function(v)
+	if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then LocalPlayer.Character.Humanoid.WalkSpeed = v end
+end)
+createSlider(tabMovement, "JumpPower (Высота прыжка)", 50, 300, 50, function(v)
+	if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then LocalPlayer.Character.Humanoid.JumpPower = v end
+end)
+createToggle(tabMovement, "Полет (Fly)", false, function(v)
+	_G.PulseConfig.Fly = v
+	local char = LocalPlayer.Character
+	if v and char and char:FindFirstChild("HumanoidRootPart") then
+		local hrp = char.HumanoidRootPart
+		local bv = Instance.new("BodyVelocity", hrp)
+		bv.Name = "FlyVelocity"; bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+		ActiveConnections.FlyLoop = RunService.Heartbeat:Connect(function()
+			local dir = Vector3.new(0,0,0)
+			if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + Camera.CFrame.LookVector end
+			if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - Camera.CFrame.LookVector end
+			bv.Velocity = dir * flySpeed
+		end)
+	else
+		if ActiveConnections.FlyLoop then ActiveConnections.FlyLoop:Disconnect() end
+		if char and char.HumanoidRootPart:FindFirstChild("FlyVelocity") then char.HumanoidRootPart.FlyVelocity:Destroy() end
+	end
+end)
+
 createToggle(tabMovement, "Проход сквозь стены (Noclip)", false, function(v)
-	isNoclip = v
+	_G.PulseConfig.Noclip = v
 	if v then
-		noclipConnection = RunService.Stepped:Connect(function()
-			if isNoclip and LocalPlayer.Character then
+		ActiveConnections.Noclip = RunService.Stepped:Connect(function()
+			if LocalPlayer.Character then
 				for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
 					if part:IsA("BasePart") then part.CanCollide = false end
 				end
 			end
 		end)
 	else
-		if noclipConnection then noclipConnection:Disconnect() end
-	end
-end)
-createToggle(tabMovement, "Режим Полета (Fly)", false, function(v)
-	isFly = v
-	local char = LocalPlayer.Character
-	if not char or not char:FindFirstChild("HumanoidRootPart") then return end
-	local hrp = char.HumanoidRootPart
-	if v then
-		local bv = Instance.new("BodyVelocity", hrp) bv.Name = "FlyVelocity" bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-		local bg = Instance.new("BodyGyro", hrp) bg.Name = "FlyGyro" bg.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-		flyConnection = RunService.RenderStepped:Connect(function()
-			if not isFly or not hrp.Parent then return end
-			local cam = workspace.CurrentCamera
-			local moveDir = Vector3.new(0,0,0)
-			if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir = moveDir + cam.CFrame.LookVector end
-			if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir = moveDir - cam.CFrame.LookVector end
-			bv.Velocity = moveDir * flySpeed bg.CFrame = cam.CFrame
-		end)
-	else
-		if hrp:FindFirstChild("FlyVelocity") then hrp.FlyVelocity:Destroy() end
-		if hrp:FindFirstChild("FlyGyro") then hrp.FlyGyro:Destroy() end
-		if flyConnection then flyConnection:Disconnect() end
+		if ActiveConnections.Noclip then ActiveConnections.Noclip:Disconnect() end
 	end
 end)
 
-_G.AntiAFKActive = false
-createToggle(tabUtils, "Анти-АФК (Anti-AFK)", false, function(v)
-	_G.AntiAFKActive = v
+createToggle(tabMovement, "Анти-Флинг", false, function(v)
+	_G.PulseConfig.AntiFlingActive = v
 	if v then
-		local vu = game:GetService("VirtualUser")
-		_G.AntiAfkConnection = LocalPlayer.Idled:Connect(function()
-			if _G.AntiAFKActive then
-				vu:Button2Down(Vector2.new(0,0), workspace.CurrentCamera.CFrame) task.wait(0.5)
-				vu:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+		ActiveConnections.Fling = RunService.Heartbeat:Connect(function()
+			if LocalPlayer.Character then
+				for _, p in pairs(LocalPlayer.Character:GetDescendants()) do
+					if p:IsA("BasePart") then p.Velocity = Vector3.new(0,0,0); p.RotVelocity = Vector3.new(0,0,0) end
+				end
 			end
 		end)
 	else
-		if _G.AntiAfkConnection then _G.AntiAfkConnection:Disconnect() end
+		if ActiveConnections.Fling then ActiveConnections.Fling:Disconnect() end
 	end
 end)
-createToggle(tabUtils, "Анти-Флинг (Anti-Fling)", false, function(v)
-	_G.AntiFlingActive = v
+
+createToggle(tabMovement, "Анти-АФК", false, function(v)
+	_G.PulseConfig.AntiAFKActive = v
 	if v then
-		_G.AntiFlingConnection = RunService.Heartbeat:Connect(function()
-			if not _G.AntiFlingActive or not LocalPlayer.Character then return end
-			for _, part in pairs(LocalPlayer.Character:GetDescendants()) do
-				if part:IsA("BasePart") then part.CanCollide = false part.Velocity = Vector3.new(0,0,0) end
-			end
+		ActiveConnections.AFK = LocalPlayer.Idled:Connect(function()
+			game:GetService("VirtualUser"):ClickButton1(Vector2.new(0,0))
 		end)
 	else
-		if _G.AntiFlingConnection then _G.AntiFlingConnection:Disconnect() end
-	end
-end)
-createToggle(tabUtils, "Быстрый автокликер", false, function(v)
-	isAutoClick = v
-	if v then
-		autoClickConnection = RunService.RenderStepped:Connect(function()
-			if isAutoClick and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
-				game:GetService("VirtualUser"):ClickButton1(Vector2.new(0, 0))
-			end
-		end)
-	else
-		if autoClickConnection then autoClickConnection:Disconnect() end
-	end
-end)
-createToggle(tabUtils, "Очистить эффекты", false, function(v) if v then menuBlur.Size = 0 end end)
-createToggle(tabUtils, "Принудительный FPS Boost", false, function() end)
-
--- КАРТОЧКА НАСТРОЕК С ЗАКРУГЛЕННЫМИ УГЛАМИ
-local ScriptStatsCard = Instance.new("Frame")
-ScriptStatsCard.Size = UDim2.new(1, -10, 0, 140)
-ScriptStatsCard.BackgroundColor3 = Color3.fromRGB(22, 22, 22)
-ScriptStatsCard.BorderSizePixel = 0
-ScriptStatsCard.Parent = tabSettings
-Instance.new("UICorner", ScriptStatsCard).CornerRadius = UDim.new(0, 8)
-
-local CardTitle = Instance.new("TextLabel")
-CardTitle.Text = "  ХАРАКТЕРИСТИКИ СКРИПТА"
-CardTitle.Size = UDim2.new(1, 0, 0, 30)
-CardTitle.TextColor3 = Color3.fromRGB(0, 120, 255)
-CardTitle.Font = Enum.Font.SourceSansBold
-CardTitle.TextSize = 14
-CardTitle.TextXAlignment = Enum.TextXAlignment.Left
-CardTitle.BackgroundTransparency = 1
-CardTitle.Parent = ScriptStatsCard
-
-local StatsText = Instance.new("TextLabel")
-StatsText.Size = UDim2.new(1, -20, 1, -40)
-StatsText.Position = UDim2.new(0, 15, 0, 35)
-StatsText.TextColor3 = Color3.fromRGB(200, 200, 200)
-StatsText.Font = Enum.Font.SourceSansSemibold
-StatsText.TextSize = 14
-StatsText.TextXAlignment = Enum.TextXAlignment.Left
-StatsText.TextYAlignment = Enum.TextYAlignment.Top
-StatsText.BackgroundTransparency = 1
-StatsText.Parent = ScriptStatsCard
-
-RunService.RenderStepped:Connect(function(dt)
-	if tabSettings.Visible then
-		local fps = math.floor(1 / dt)
-		local ping = math.floor(LocalPlayer:GetNetworkPing() * 1000)
-		local uptime = os.time() - scriptStartTime
-		StatsText.Text = string.format(
-			"Имя: %s\nFPS: %d\nPing: %d ms\nUptime: %02d:%02d:%02d\nPlatform: Xeno Injector",
-			LocalPlayer.Name, fps, ping, math.floor(uptime / 3600), math.floor((uptime % 3600) / 60), uptime % 60
-		)
+		if ActiveConnections.AFK then ActiveConnections.AFK:Disconnect() end
 	end
 end)
 
 -- ============================================================================
--- ЧАСТЬ 6: СИСТЕМА RIGHTSHIFT, ИНТРО-АНИМАЦИЯ И SMOOTH DRAGGING
+-- ЧАСТЬ 6: ОКРУЖЕНИЕ, МУЗЫКА, ТЕЛЕПОРТЫ, БИНДЫ, НАСТРОЙКИ И RIGHTSHIFT
 -- ============================================================================
+local tabWorld = createTab("World", 4)
+local tabMusic = createTab("Music", 5)
+local tabPlayers = createTab("Players", 6)
+local tabSettings = createTab("Settings", 7)
+
+-- Мир (Окружение)
+createToggle(tabWorld, "Fullbright (Свет везде)", false, function(v)
+	Lighting.Ambient = v and Color3.fromRGB(255,255,255) or Color3.fromRGB(128,128,128)
+end)
+createSlider(tabWorld, "Поле зрения FOV камеры", 70, 120, 70, function(v) Camera.FieldOfView = v end)
+
+-- Музыка из Локальных файлов PC (Через симуляцию аудио-загрузчика)
+createToggle(tabWorld, "Эффект окружения: Снег", false, function(v) UpdateWorldParticles(v and "Snow" or "None") end)
+createToggle(tabWorld, "Эффект окружения: Дождь", false, function(v) UpdateWorldParticles(v and "Rain" or "None") end)
+
+-- Раздел Игроки (Спектатор и Моментальный Телепорт)
+local SelectedPlayerName = ""
+createToggle(tabPlayers, "Телепортироваться к игроку", false, function(v)
+	if v then
+		for _, p in pairs(Players:GetPlayers()) do
+			if p ~= LocalPlayer and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+				LocalPlayer.Character.HumanoidRootPart.CFrame = p.Character.HumanoidRootPart.CFrame
+				break
+			end
+		end
+	end
+end)
+
+-- Раздел Настройки (Смена цвета всего Pulse Visuals)
+createSlider(tabSettings, "Цвет интерфейса (R)", 0, 255, 0, function(v)
+	_G.PulseConfig.MenuColor = Color3.fromRGB(v, _G.PulseConfig.MenuColor.G*255, _G.PulseConfig.MenuColor.B*255)
+	MenuTitle.TextColor3 = _G.PulseConfig.MenuColor
+end)
+
+-- === ЛОГИКА АНИМАЦИИ ОТКРЫТИЯ И ВЫКЛЮЧЕНИЯ СНЕГА ПРИ ЗАКРЫТИИ ЧИТА ===
 local toggleInfo = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local isMenuOpen = true
 
@@ -614,57 +714,52 @@ local function setGuiTransparency(targetTransparency)
 	TweenService:Create(MainFrame, toggleInfo, {BackgroundTransparency = targetTransparency}):Play()
 	TweenService:Create(Sidebar, toggleInfo, {BackgroundTransparency = targetTransparency}):Play()
 	TweenService:Create(PreviewPane, toggleInfo, {BackgroundTransparency = targetTransparency}):Play()
+	
 	local overlayTarget = targetTransparency == 0 and 0.45 or 1
 	TweenService:Create(BlurOverlay, toggleInfo, {BackgroundTransparency = overlayTarget}):Play()
 end
 
+-- Стартовая интро анимация вылета
 local introInfo = TweenInfo.new(0.6, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
 TweenService:Create(MainFrame, introInfo, {Position = UDim2.new(0.5, -325, 0.5, -200), BackgroundTransparency = 0}):Play()
 TweenService:Create(Sidebar, introInfo, {BackgroundTransparency = 0}):Play()
 TweenService:Create(PreviewPane, introInfo, {BackgroundTransparency = 0}):Play()
 TweenService:Create(BlurOverlay, introInfo, {BackgroundTransparency = 0.45}):Play()
 
+-- Переключатель RightShift с ПОЛНОЙ деактивацией снега на фоне
 UserInputService.InputBegan:Connect(function(input, gpe)
 	if input.KeyCode == Enum.KeyCode.RightShift then
 		isMenuOpen = not isMenuOpen
 		if isMenuOpen then
-			MainFrame.Visible = true setGuiTransparency(0)
+			BlurOverlay.Visible = true -- Включаем контейнер снега обратно
+			MainFrame.Visible = true 
+			setGuiTransparency(0)
 		else
 			setGuiTransparency(1)
-			task.delay(0.3, function() if not isMenuOpen then MainFrame.Visible = false end end)
+			task.delay(0.3, function() 
+				if not isMenuOpen then 
+					MainFrame.Visible = false 
+					BlurOverlay.Visible = false -- Полностью выключаем рендер и движение UI-снега
+				end 
+			end)
 		end
 	end
 end)
 
-local dragging = false
-local dragInput = nil
-local dragStart = nil
-local startPos = nil
-
-local function updateDrag(input)
-	local delta = input.Position - dragStart
-	local targetPosition = UDim2.new(
-		startPos.X.Scale, startPos.X.Offset + delta.X, 
-		startPos.Y.Scale, startPos.Y.Offset + delta.Y
-	)
-	TweenService:Create(MainFrame, TweenInfo.new(0.15, Enum.EasingStyle.OutQuad), {Position = targetPosition}):Play()
-end
-
+-- Сглаженное кастомное перемещение (Smooth Drag) для Главного Меню
+local dragging = false; local dragInput, dragStart, startPos
 MainFrame.InputBegan:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-		dragging = true dragStart = input.Position startPos = MainFrame.Position
-		input.Changed:Connect(function()
-			if input.UserInputState == Enum.UserInputState.End then dragging = false end
-		end)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = true; dragStart = input.Position; startPos = MainFrame.Position
+		input.Changed:Connect(function() if input.UserInputState == Enum.UserInputState.End then dragging = false end end)
 	end
 end)
-
-MainFrame.InputChanged:Connect(function(input)
-	if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-		dragInput = input
-	end
-end)
-
+MainFrame.InputChanged:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseMovement then dragInput = input end end)
 UserInputService.InputChanged:Connect(function(input)
-	if input == dragInput and dragging then updateDrag(input) end
+	if input == dragInput and dragging then
+		local delta = input.Position - dragStart
+		TweenService:Create(MainFrame, TweenInfo.new(0.12, Enum.EasingStyle.OutQuad), {
+			Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+		}):Play()
+	end
 end)
